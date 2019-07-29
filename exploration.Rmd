@@ -1,0 +1,218 @@
+---
+title: "DataIncubator"
+author: "Gao Yan"
+date: "2019/7/29"
+output: html_document
+---
+
+```{r libraries}
+rm(list = ls()) 
+setwd("E:/000Files/DataIncubator/project/Loans")
+library(ggplot2)
+library(ggmap)
+library(maps)
+library(mapdata)
+library(ggplot2)
+library(fiftystater)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(stringr)
+```
+
+## Map
+
+```{r Load USA map}
+usa <- map_data("usa")
+states <- map_data("state")
+ggplot(data = states) + 
+  geom_polygon(aes(x = long, y = lat, fill = region, group = group), color = "white") + 
+  coord_fixed(1.3) +
+  guides(fill=FALSE)  # do this to leave off the color legend
+
+```
+
+
+```{r Generate map plots showing loan default ratio in each state}
+Df = read.csv('CleanData_train&validate.csv')[,-1]
+df=Df
+set.seed=100
+df = df[c('status','addr_state','year','month','date')]
+Date = as.Date(paste(df$date,"-01", sep =""))
+df$date = Date
+df_test = df[df$date>=as.Date('2016-08-01'),]
+df = df[df$date<as.Date('2016-08-01'),]
+DrawMap = function(dff,year_number=''){
+  if (nchar(year_number)>4) {
+    df_map = dff
+  } else{
+    df_map = dff[dff$year==year_number,]
+  }
+  map_data = as.data.frame(table(df_map$status,df_map$addr_state))
+  colnames(map_data)=c('status','region','freq')
+  x = split(map_data,map_data$status)
+  df1 = x['1Good']$`1Good`
+  rownames(df1) = df1$region
+  df1 = df1['freq']
+  colnames(df1) = '1Good'
+  df2 = x['3Bad']$`3Bad`
+  rownames(df2) = df2$region
+  df2 = df2['freq']
+  colnames(df2) = '3Bad'
+  map_data = cbind(df1,df2)
+  map_data['state_abb'] = rownames(map_data)
+  map_data$`1Good`[map_data$`1Good`<=10]=0
+  map_data$`1Good`[map_data$`3Bad`<=10]=0
+  map_data$`3Bad`[map_data$`1Good`<=10]=0
+  map_data$`3Bad`[map_data$`3Bad`<=10]=0
+  map_data['ratio']=round(map_data$`1Good`/(map_data$`1Good`+map_data$`3Bad`),digits = 2)
+  if (nrow(map_data)>50) {
+    map_data = map_data[-8,]
+  }
+  map_data$States=state.name[match(map_data$state_abb,state.abb)]
+  map_data$states = tolower(map_data$States)
+  data("fifty_states")
+  p=ggplot(map_data, aes(map_id = map_data$states)) + 
+    geom_map(aes(fill = ratio), map = fifty_states) + 
+    scale_fill_gradient(limits=c(0.65,0.95), 
+                        low = 'dodgerblue4',
+                        high = 'lightskyblue1',
+                        guide = guide_legend(title = "Good ratio")) +
+    borders("state",colour = "white") +
+    borders("usa",colour = "dodgerblue4") +
+    expand_limits(x = fifty_states$long, y = fifty_states$lat) +
+    scale_x_continuous(breaks = NULL) + 
+    scale_y_continuous(breaks = NULL) +
+    labs(x = "", y = "", title=year_number,
+         legend.background = element_rect(colour = 'blue')) +
+    theme(legend.position = "bottom",
+          panel.background = element_blank()) + 
+    fifty_states_inset_boxes()+
+    coord_fixed(1.3)
+  p
+  ggsave(paste(year_number,".jpg",sep=''))
+  write.csv(map_data,paste(year_number,'.csv',sep=''))
+  return(list(p,map_data))
+}
+
+listt = DrawMap(df_test,'test:2016.08-2017.12')
+print(listt[[1]])
+ggsave(paste('2016.08-2017.12',".jpg",sep=''))
+map_data = listt[[2]]
+map_data = map_data[c('state_abb','ratio')]
+colnames(map_data)[2]= '2017'
+df_ratio=map_data
+ratio = map_data[,2]
+ratio_2017 = c(min(ratio,na.rm=TRUE),max(ratio,na.rm=TRUE),mean(ratio,na.rm=TRUE))
+df_ratio_summary = as.data.frame(ratio_2017)
+l=list()
+for (x in c('2013','2014','2015','2016')) {
+  listt=DrawMap(df,x)
+  print(listt[[1]])
+  map_data = listt[[2]]
+  map_data = map_data[c('state_abb','ratio')]
+  colnames(map_data)[2]= x
+  df_ratio = merge(x=df_ratio,y=map_data,by='state_abb')
+  ratio = map_data[,2]
+  ratio_summary = c(min(ratio,na.rm=TRUE),max(ratio,na.rm=TRUE),mean(ratio,na.rm=TRUE))
+  ratio_summary = as.data.frame(ratio_summary)
+  df_ratio_summary = cbind.data.frame(df_ratio_summary,ratio_summary)
+}
+rownames(df_ratio_summary)=c('min','max','mean')
+colnames(df_ratio_summary)=c('2017','2013','2014','2015','2016')
+
+df_ratio$`2017`=NULL
+df_ratio1 = df_ratio
+df_ratio = df_ratio %>% gather(key = "year", value = "ratio",-state_abb)
+df_ratio = unite(df_ratio,state_year,state_abb,year)
+```
+
+
+```{r Use Wind API to obtain economics data in each states}
+library(WindR)
+w.start()
+multiMerge = function(l,by){
+  df_merge = l[[1]]
+  l[[1]]=NULL
+  for (x in l) {
+    df_merge = merge(df_merge,x,by=by)
+  }
+  return(df_merge)
+}
+
+l_states_names = c('AL','AK','AZ','AR','CA','CO','CT','DE','DC','FL',
+                   'GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD',
+                   'MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ',
+                   'NM','NY','NC','ND','OH','OK','OR','PA','RI','SC',	
+                   'SD','TN','TX','UT','VT','VA','WA','WV','WI','WY')
+# States unemployment rate
+l_number = 'G1125905'
+for (i in 1:50) {
+  number = 1125905+i
+  symbol = paste('G',number,sep='')
+  l_number = paste(l_number,symbol,sep=',')
+}
+States_unemp<-w.edb(l_number,'2011-12-01','2018-05-31','Fill=Previous')
+df_States_unemp = States_unemp$Data
+colnames(df_States_unemp)[1]='date'
+colnames(df_States_unemp)[2:52]=paste('States_unemp',l_states_names,sep='_')
+# States annuall income
+l_number = 'G1127078'
+for (i in 1:50) {
+  number = 1127078+i
+  symbol = paste('G',number,sep='')
+  l_number = paste(l_number,symbol,sep=',')
+}
+States_income<-w.edb(l_number,'2011-01-01','2018-05-31','Fill=Previous')
+df_States_income = States_income$Data
+colnames(df_States_income)[1]='date'
+colnames(df_States_income)[2:52]=paste('States_income',l_states_names,sep='_')
+df_States_income = separate(df_States_income,date,c('year','month','day'))
+df_States_income[,c('month','day')]=NULL
+colnames(df_States_income)[2:52]=l_states_names
+colnames(df_States_unemp)[2:52]=l_states_names
+Date = df_States_unemp$date
+Date = substr(Date,1,7)
+df_States_unemp$date = Date
+
+write.csv(df_States_unemp, 'econ_States_unemp.csv')
+write.csv(df_States_income, 'econ_States_income.csv')
+```
+
+
+```{r Generate plots showing the relationship between }
+
+df_States_unemp = read.csv('econ_States_unemp.csv')
+df_States_income = read.csv('econ_States_income.csv')
+
+df_States_income_new = gather(df_States_income,key='state',value='average_income',-year)
+df_States_income_new = unite(df_States_income_new,state_year,state,year,sep='_')
+df_States_unemp_new = gather(df_States_unemp,key='state',value='unemp',-date)
+library(reshape)
+df1 = separate(df_States_unemp_new,date,c('year','month'))
+df1 = cast(df1,year~state, value = 'unemp',mean)
+df2 = gather(df1,key='state',value='unemp',-year)
+df_States_unemp_new = unite(df2,state_year,state,year,sep='_')
+
+df1=merge(df_ratio,df_States_unemp_new,by='state_year')
+df=merge(df1,df_States_income_new,by='state_year')
+
+ggplot(data = df) +
+  geom_point(mapping = aes(x = ratio, y = unemp))
+ggplot(data = df) +
+  geom_point(mapping = aes(x = ratio, y = average_income))
+
+ggplot(data = df, mapping = aes(x = ratio)) +
+  geom_freqpoly(binwidth = 0.25)
+```
+
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
